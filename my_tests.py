@@ -3,9 +3,13 @@
 from __future__ import division
 from __future__ import print_function
 from __future__ import absolute_import
+from dataclasses import dataclass
 
 import numpy as np
 import sys
+import seaborn as sb
+import pandas as pd
+import matplotlib.pyplot as plt
 
 
 # Python 3 backwards compatibility tricks
@@ -58,7 +62,7 @@ def file_splitter(filename, seed = 0, train_prop = 0.7, dev_prop = 0.15,
     test_file.close()
     dev_file.close()
 
-def read_texts(tarfname, dname):
+def read_texts(tarfname, dname, data_proportion):
     """Read the data from the homework data file.
 
     Given the location of the data archive file and the name of the
@@ -70,13 +74,10 @@ def read_texts(tarfname, dname):
     tar = tarfile.open(tarfname, "r:gz", errors = 'replace')
     for member in tar.getmembers():
         if dname in member.name and ('train.txt') in member.name:
-            print('\ttrain: %s'%(member.name))
             train_txt = unicode(tar.extractfile(member).read(), errors='replace')
         elif dname in member.name and ('test.txt') in member.name:
-            print('\ttest: %s'%(member.name))
             test_txt = unicode(tar.extractfile(member).read(), errors='replace')
         elif dname in member.name and ('dev.txt') in member.name:
-            print('\tdev: %s'%(member.name))
             dev_txt = unicode(tar.extractfile(member).read(), errors='replace')
 
     from sklearn.feature_extraction.text import CountVectorizer
@@ -90,6 +91,7 @@ def read_texts(tarfname, dname):
         toks = tokenizer(s)
         if len(toks) > 0:
             data.train.append(toks)
+    data.train = data.train[0:int(len(data.train) * data_proportion)]
     data.test = []
     for s in test_txt.split("\n"):
         toks = tokenizer(s)
@@ -100,7 +102,6 @@ def read_texts(tarfname, dname):
         toks = tokenizer(s)
         if len(toks) > 0:
             data.dev.append(toks)
-    print(dname," read.", "train:", len(data.train), "dev:", len(data.dev), "test:", len(data.test))
     return data
 
 def learn_unigram(data, verbose=True):
@@ -122,7 +123,7 @@ def learn_unigram(data, verbose=True):
         sampler = Sampler(unigram)
         print("sample 1: ", " ".join(str(x) for x in sampler.sample_sentence([])))
         print("sample 2: ", " ".join(str(x) for x in sampler.sample_sentence([])))
-    return unigram
+    return unigram, unigram.perplexity(data.test)
 
 def print_table(table, row_names, col_names, latex_file = None):
     """Pretty prints the table given the table, and row and col names.
@@ -147,36 +148,48 @@ def print_table(table, row_names, col_names, latex_file = None):
 
 if __name__ == "__main__":
 
+    # Create a dataframe
+    df = pd.DataFrame(columns=['Dataset', 'Dataset Proportion', 'Perplexity'])
+
+    # Store the test results
     dnames = ["brown", "reuters", "gutenberg"]
     datas = []
     models = []
+
     # Learn the models for each of the domains, and evaluate it
     for dname in dnames:
-        print("-----------------------")
-        print(dname)
-        data = read_texts("data/corpora.tar.gz", dname)
-        datas.append(data)
-        model = learn_unigram(data)
-        models.append(model)
-    # compute the perplexity of all pairs
-    n = len(dnames)
-    perp_dev = np.zeros((n,n))
-    perp_test = np.zeros((n,n))
-    perp_train = np.zeros((n,n))
-    for i in xrange(n):
-        for j in xrange(n):
-            perp_dev[i][j] = models[i].perplexity(datas[j].dev)
-            perp_test[i][j] = models[i].perplexity(datas[j].test)
-            perp_train[i][j] = models[i].perplexity(datas[j].train)
+        print(f"\nTraining using the {dname.capitalize()} Dataset")
+        print("----------------------------------------")
 
-    print("-------------------------------")
-    print("x train")
-    print_table(perp_train, dnames, dnames, "table-train.tex")
-    print("-------------------------------")
-    print("x dev")
-    print_table(perp_dev, dnames, dnames, "table-dev.tex")
-    print("-------------------------------")
-    print("x test")
-    print_table(perp_test, dnames, dnames, "table-test.tex")
+        # Get a list of perplexities
+        perplexities = []
 
+        # Get a list of dataset proportions
+        data_props = []
+
+        # For each model, test it with varying amounts data training data
+        for data_prop in np.linspace(0.2, 1, 5):
+
+            # Find the subset of data to use
+            data = read_texts("data/corpora.tar.gz", dname, data_prop)
+
+            # Display the current training information
+            print(f"Training using {int(data_prop * 100)}% of the data, which is {len(data.train)} sentences.")
+
+            # Train the model on the sub data
+            model, perplexity = learn_unigram(data, verbose=False)
+
+            # Add the perplexity to the list 
+            perplexities.append(perplexity)
+
+            # Add the dataset proportion to the list
+            data_props.append(data_prop)
+
+        # Append the perplexities to the dataframe
+        for data_prop, perp in zip(data_props, perplexities):
+            df = df.append({'Dataset': dname, 'Dataset Proportion': data_prop, 'Perplexity': perp}, ignore_index=True)
+
+    # Graph the dataframe
+    sb.lineplot(x='Dataset Proportion', y='Perplexity', hue='Dataset', data=df)
+    plt.show()
     
